@@ -144,7 +144,7 @@ fn get_required_things(config: &Config) -> Result<RequiredThings> {
     println!("{} dependencies", make_label("Loading"));
     fn resolve_dependencies_for(app: &ScoopApp) -> Result<HashSet<ScoopApp>> {
         println!("{} {}", make_sublabel("Resolving"), app);
-        let output = Command::new("scoop")
+        let output = Command::new("scoop.cmd")
             .arg("depends")
             .arg(&app.name)
             .output()
@@ -212,7 +212,7 @@ struct InstalledThings {
 // インストールされているアプリケーションのリストを取得
 fn get_installed_things() -> Result<InstalledThings> {
     println!("{} currently installed applications", make_label("Loading"));
-    let exported = Command::new("scoop")
+    let exported = Command::new("scoop.cmd")
         .arg("export")
         .output()
         .into_diagnostic()
@@ -381,7 +381,7 @@ fn compute_things_to_install(
 }
 
 fn uninstall_buckets<'a>(buckets: impl IntoIterator<Item = &'a ScoopBucket>) -> Result<()> {
-    Command::new("scoop")
+    Command::new("scoop.cmd")
         .arg("bucket")
         .arg("rm")
         .args(buckets.into_iter().map(|bucket| bucket.name.clone()))
@@ -393,7 +393,7 @@ fn uninstall_buckets<'a>(buckets: impl IntoIterator<Item = &'a ScoopBucket>) -> 
 }
 
 fn uninstall_apps<'a>(apps: impl IntoIterator<Item = &'a ScoopApp>) -> Result<()> {
-    Command::new("scoop")
+    Command::new("scoop.cmd")
         .arg("uninstall")
         .args(apps.into_iter().map(|app| app.to_string()))
         .output()
@@ -404,7 +404,7 @@ fn uninstall_apps<'a>(apps: impl IntoIterator<Item = &'a ScoopApp>) -> Result<()
 }
 
 fn install_buckets<'a>(buckets: impl IntoIterator<Item = &'a ScoopBucket>) -> Result<()> {
-    Command::new("scoop")
+    Command::new("scoop.cmd")
         .arg("bucket")
         .arg("add")
         .args(buckets.into_iter().map(|bucket| bucket.name.clone()))
@@ -416,7 +416,7 @@ fn install_buckets<'a>(buckets: impl IntoIterator<Item = &'a ScoopBucket>) -> Re
 }
 
 fn install_apps<'a>(apps: impl IntoIterator<Item = &'a ScoopApp>) -> Result<()> {
-    Command::new("scoop")
+    Command::new("scoop.cmd")
         .arg("install")
         .args(apps.into_iter().map(|app| app.to_string()))
         .output()
