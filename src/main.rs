@@ -142,7 +142,7 @@ struct RequiredThings {
 
 fn get_required_things(config: &Config) -> Result<RequiredThings> {
     println!("{} dependencies", make_label("Loading"));
-    fn resolve_dependencies_for(app: &ScoopApp) -> Result<HashSet<ScoopApp>> {
+    fn get_dependencies_of(app: &ScoopApp) -> Result<HashSet<ScoopApp>> {
         println!("{} {}", make_sublabel("Resolving"), app);
         let output = Command::new("scoop.cmd")
             .arg("depends")
@@ -150,15 +150,14 @@ fn get_required_things(config: &Config) -> Result<RequiredThings> {
             .output()
             .into_diagnostic()
             .wrap_err_with(|| miette!("failed to invoke `scoop depends {app}`"))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
 
-        if !output.status.success() {
+        if !output.status.success() || stdout.contains("Couldn't find manifest for") {
             bail!(
                 "failed to get dependencies for {app}: {stderr}",
                 stderr = String::from_utf8_lossy(&output.stderr)
             );
         }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
 
         stdout
             .lines()
@@ -189,9 +188,13 @@ fn get_required_things(config: &Config) -> Result<RequiredThings> {
             continue;
         }
 
-        let dependencies = resolve_dependencies_for(&app).wrap_err_with(|| {
-            miette!("failed to resolve dependencies for {name}", name = app.name)
-        })?;
+        let dependencies = match get_dependencies_of(&app) {
+            Ok(deps) => deps,
+            Err(e) => {
+                println!("{} Skipping due to error: {e}", make_sublabel("Info"));
+                continue;
+            }
+        };
 
         to_resolve.extend(dependencies.clone());
         resolved.insert(app.clone(), dependencies);
