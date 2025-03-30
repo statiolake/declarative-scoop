@@ -7,6 +7,7 @@ use std::{
     process::Command,
 };
 
+use colored::*;
 use miette::{IntoDiagnostic, Result, WrapErr, bail, miette};
 use serde::Deserialize;
 
@@ -53,41 +54,44 @@ impl<'de> Deserialize<'de> for ScoopApp {
     }
 }
 
+fn make_label(title: &str) -> impl fmt::Display {
+    format!("{title:>10}").green().bold()
+}
+
+fn make_sublabel(title: &str) -> impl fmt::Display {
+    format!("{title:>10}").cyan().bold()
+}
+
 fn main() -> Result<()> {
     let config = read_config_from_file("app-requirements.yaml")?;
-    println!("Specified applications: {:?}", config);
-
     let required = get_required_things(&config).wrap_err("failed to resolve dependencies")?;
-    println!("Applications with dependencies: {:?}", required.scoop_apps);
-
     let installed = get_installed_things().wrap_err("failed to get installed applications")?;
-    println!(
-        "Currently installed applications: {:?}",
-        installed.scoop_apps
-    );
-
     let to_uninstall = compute_things_to_uninstall(&installed, &required);
     let to_install = compute_things_to_install(&installed, required);
-    println!("Applications to uninstall: {:?}", to_uninstall);
-    println!("Applications to install: {:?}", to_install);
 
     if !to_uninstall.scoop_apps.is_empty() || !to_uninstall.scoop_buckets.is_empty() {
-        println!("\n🗑️  Following items will be uninstalled:");
+        println!(
+            "\n🗑️  Following items will be {}",
+            "uninstalled".red().bold()
+        );
         for bucket in &to_uninstall.scoop_buckets {
-            println!("  - bucket: {}", bucket.name);
+            println!("{:>8} {}", "bucket".red(), bucket.name);
         }
         for app in &to_uninstall.scoop_apps {
-            println!("  - app:    {}", app);
+            println!("{:>8} {}", "app".red(), app);
         }
     }
 
     if !to_install.scoop_apps.is_empty() || !to_install.scoop_buckets.is_empty() {
-        println!("\n📦 Following items will be installed:");
+        println!(
+            "\n📦 Following items will be {}",
+            "installed".green().bold()
+        );
         for bucket in &to_install.scoop_buckets {
-            println!("  - bucket: {}", bucket.name);
+            println!("{:>8} {}", "bucket".green(), bucket.name);
         }
         for app in &to_install.scoop_apps {
-            println!("  - app:    {}", app);
+            println!("{:>8} {}", "app".green(), app);
         }
     }
 
@@ -96,33 +100,36 @@ fn main() -> Result<()> {
         && to_install.scoop_apps.is_empty()
         && to_install.scoop_buckets.is_empty()
     {
-        println!("\n✨ Everything is up to date!");
+        println!("\n✨ {}", "Everything is up to date!".green().bold());
         return Ok(());
     }
 
-    print!("\nDo you want to proceed? [y/N] ");
+    print!("\nDo you want to proceed? {} ", "[y/N]".cyan());
     std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).into_diagnostic()?;
 
     if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
-        println!("Operation cancelled.");
+        println!("{}", "Operation cancelled.".yellow());
         return Ok(());
     }
 
     if !to_uninstall.scoop_apps.is_empty() || !to_uninstall.scoop_buckets.is_empty() {
-        println!("\n🗑️  Uninstalling items...");
+        println!("\n🗑️  {}", "Uninstalling items...".red().bold());
         uninstall_apps(&to_uninstall.scoop_apps)?;
         uninstall_buckets(&to_uninstall.scoop_buckets)?;
     }
 
     if !to_install.scoop_apps.is_empty() || !to_install.scoop_buckets.is_empty() {
-        println!("\n📦 Installing items...");
+        println!("\n📦 {}", "Installing items...".green().bold());
         install_buckets(&to_install.scoop_buckets)?;
         install_apps(&to_install.scoop_apps)?;
     }
 
-    println!("\n✨ Operation completed successfully!");
+    println!(
+        "\n✨ {}",
+        "Operation completed successfully!".green().bold()
+    );
 
     Ok(())
 }
@@ -154,8 +161,9 @@ struct RequiredThings {
 }
 
 fn get_required_things(config: &Config) -> Result<RequiredThings> {
+    println!("{} dependencies", make_label("Loading"));
     fn resolve_dependencies_for(app: &ScoopApp) -> Result<HashSet<ScoopApp>> {
-        println!("Resolving {app}");
+        println!("{} {}", make_sublabel("Resolving"), app);
         let output = Command::new("scoop")
             .arg("depends")
             .arg(&app.name)
@@ -223,7 +231,10 @@ struct InstalledThings {
 
 // インストールされているアプリケーションのリストを取得
 fn get_installed_things() -> Result<InstalledThings> {
-    println!("Loading currently installed applications");
+    println!(
+        "{} currently installed applications",
+        make_label("Loading")
+    );
     let exported = Command::new("scoop")
         .arg("export")
         .output()
