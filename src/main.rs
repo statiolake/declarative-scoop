@@ -146,7 +146,7 @@ fn get_required_things(config: &Config) -> Result<RequiredThings> {
         println!("{} {}", make_sublabel("Resolving"), app);
         let output = Command::new("scoop.cmd")
             .arg("depends")
-            .arg(&app.name)
+            .arg(&app.to_string())
             .output()
             .into_diagnostic()
             .wrap_err_with(|| miette!("failed to invoke `scoop depends {app}`"))?;
@@ -388,9 +388,12 @@ fn uninstall_buckets<'a>(buckets: impl IntoIterator<Item = &'a ScoopBucket>) -> 
         .arg("bucket")
         .arg("rm")
         .args(buckets.into_iter().map(|bucket| bucket.name.clone()))
-        .output()
+        .spawn()
         .into_diagnostic()
-        .wrap_err("failed to uninstall buckets")?;
+        .wrap_err("failed to spawn uninstalling buckets")?
+        .wait()
+        .into_diagnostic()
+        .wrap_err("failed to wait uninstalling buckets")?;
 
     Ok(())
 }
@@ -399,21 +402,30 @@ fn uninstall_apps<'a>(apps: impl IntoIterator<Item = &'a ScoopApp>) -> Result<()
     Command::new("scoop.cmd")
         .arg("uninstall")
         .args(apps.into_iter().map(|app| app.to_string()))
-        .output()
+        .spawn()
         .into_diagnostic()
-        .wrap_err("failed to uninstall applications")?;
+        .wrap_err("failed to spawn uninstalling applications")?
+        .wait()
+        .into_diagnostic()
+        .wrap_err("failed to wait uninstalling applications")?;
 
     Ok(())
 }
 
 fn install_buckets<'a>(buckets: impl IntoIterator<Item = &'a ScoopBucket>) -> Result<()> {
-    Command::new("scoop.cmd")
-        .arg("bucket")
-        .arg("add")
-        .args(buckets.into_iter().map(|bucket| bucket.name.clone()))
-        .output()
-        .into_diagnostic()
-        .wrap_err("failed to install buckets")?;
+    for bucket in buckets {
+        Command::new("scoop.cmd")
+            .arg("bucket")
+            .arg("add")
+            .arg(&bucket.name)
+            .arg(&bucket.source)
+            .spawn()
+            .into_diagnostic()
+            .wrap_err("failed to spawn installing buckets")?
+            .wait()
+            .into_diagnostic()
+            .wrap_err("failed to wait installing buckets")?;
+    }
 
     Ok(())
 }
@@ -422,9 +434,12 @@ fn install_apps<'a>(apps: impl IntoIterator<Item = &'a ScoopApp>) -> Result<()> 
     Command::new("scoop.cmd")
         .arg("install")
         .args(apps.into_iter().map(|app| app.to_string()))
-        .output()
+        .spawn()
         .into_diagnostic()
-        .wrap_err("failed to install applications")?;
+        .wrap_err("failed to spawn installing applications")?
+        .wait()
+        .into_diagnostic()
+        .wrap_err("failed to wait installing applications")?;
 
     Ok(())
 }
