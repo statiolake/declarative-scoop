@@ -71,13 +71,58 @@ fn main() -> Result<()> {
     println!("Applications to uninstall: {:?}", to_uninstall);
     println!("Applications to install: {:?}", to_install);
 
-    uninstall_apps(&to_uninstall.scoop_apps)?;
-    uninstall_buckets(&to_uninstall.scoop_buckets)?;
+    if !to_uninstall.scoop_apps.is_empty() || !to_uninstall.scoop_buckets.is_empty() {
+        println!("\n🗑️  Following items will be uninstalled:");
+        for bucket in &to_uninstall.scoop_buckets {
+            println!("  - bucket: {}", bucket.name);
+        }
+        for app in &to_uninstall.scoop_apps {
+            println!("  - app:    {}", app);
+        }
+    }
 
-    install_buckets(&to_install.scoop_buckets)?;
-    install_apps(&to_install.scoop_apps)?;
+    if !to_install.scoop_apps.is_empty() || !to_install.scoop_buckets.is_empty() {
+        println!("\n📦 Following items will be installed:");
+        for bucket in &to_install.scoop_buckets {
+            println!("  - bucket: {}", bucket.name);
+        }
+        for app in &to_install.scoop_apps {
+            println!("  - app:    {}", app);
+        }
+    }
 
-    println!("Operation completed.");
+    if to_uninstall.scoop_apps.is_empty()
+        && to_uninstall.scoop_buckets.is_empty()
+        && to_install.scoop_apps.is_empty()
+        && to_install.scoop_buckets.is_empty()
+    {
+        println!("\n✨ Everything is up to date!");
+        return Ok(());
+    }
+
+    print!("\nDo you want to proceed? [y/N] ");
+    std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).into_diagnostic()?;
+
+    if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+        println!("Operation cancelled.");
+        return Ok(());
+    }
+
+    if !to_uninstall.scoop_apps.is_empty() || !to_uninstall.scoop_buckets.is_empty() {
+        println!("\n🗑️  Uninstalling items...");
+        uninstall_apps(&to_uninstall.scoop_apps)?;
+        uninstall_buckets(&to_uninstall.scoop_buckets)?;
+    }
+
+    if !to_install.scoop_apps.is_empty() || !to_install.scoop_buckets.is_empty() {
+        println!("\n📦 Installing items...");
+        install_buckets(&to_install.scoop_buckets)?;
+        install_apps(&to_install.scoop_apps)?;
+    }
+
+    println!("\n✨ Operation completed successfully!");
 
     Ok(())
 }
@@ -110,6 +155,7 @@ struct RequiredThings {
 
 fn get_required_things(config: &Config) -> Result<RequiredThings> {
     fn resolve_dependencies_for(app: &ScoopApp) -> Result<HashSet<ScoopApp>> {
+        println!("Resolving {app}");
         let output = Command::new("scoop")
             .arg("depends")
             .arg(&app.name)
@@ -177,6 +223,7 @@ struct InstalledThings {
 
 // インストールされているアプリケーションのリストを取得
 fn get_installed_things() -> Result<InstalledThings> {
+    println!("Loading currently installed applications");
     let exported = Command::new("scoop")
         .arg("export")
         .output()
