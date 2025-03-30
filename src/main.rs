@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt,
     fs::File,
-    io::BufReader,
+    io::{self, BufReader, Write},
     path::Path,
     process::Command,
 };
@@ -62,6 +62,14 @@ fn make_sublabel(title: &str) -> impl fmt::Display {
     format!("{title:>10}").cyan().bold()
 }
 
+fn format_item_add(kind: &str, name: impl fmt::Display) -> String {
+    format!("{:>8} {}", kind.green(), name)
+}
+
+fn format_item_remove(kind: &str, name: impl fmt::Display) -> String {
+    format!("{:>8} {}", kind.red(), name)
+}
+
 fn main() -> Result<()> {
     let config = read_config_from_file("app-requirements.yaml")?;
     let required = get_required_things(&config).wrap_err("failed to resolve dependencies")?;
@@ -69,67 +77,39 @@ fn main() -> Result<()> {
     let to_uninstall = compute_things_to_uninstall(&installed, &required);
     let to_install = compute_things_to_install(&installed, required);
 
-    if !to_uninstall.scoop_apps.is_empty() || !to_uninstall.scoop_buckets.is_empty() {
-        println!(
-            "\n🗑️  Following items will be {}",
-            "uninstalled".red().bold()
-        );
-        for bucket in &to_uninstall.scoop_buckets {
-            println!("{:>8} {}", "bucket".red(), bucket.name);
-        }
-        for app in &to_uninstall.scoop_apps {
-            println!("{:>8} {}", "app".red(), app);
-        }
-    }
-
-    if !to_install.scoop_apps.is_empty() || !to_install.scoop_buckets.is_empty() {
-        println!(
-            "\n📦 Following items will be {}",
-            "installed".green().bold()
-        );
-        for bucket in &to_install.scoop_buckets {
-            println!("{:>8} {}", "bucket".green(), bucket.name);
-        }
-        for app in &to_install.scoop_apps {
-            println!("{:>8} {}", "app".green(), app);
-        }
-    }
-
-    if to_uninstall.scoop_apps.is_empty()
-        && to_uninstall.scoop_buckets.is_empty()
-        && to_install.scoop_apps.is_empty()
-        && to_install.scoop_buckets.is_empty()
-    {
-        println!("\n✨ {}", "Everything is up to date!".green().bold());
+    if to_uninstall.is_empty() && to_install.is_empty() {
+        println!();
+        println!("{}", "Everything is up to date!".green().bold());
         return Ok(());
     }
 
-    print!("\nDo you want to proceed? {} ", "[y/N]".cyan());
-    std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input).into_diagnostic()?;
+    to_uninstall.describe_plan();
+    to_install.describe_plan();
 
-    if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+    println!();
+    print!("Do you want to proceed? {} ", "[y/N]".cyan());
+    io::stdout().flush().into_diagnostic()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).into_diagnostic()?;
+
+    if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes" | "Y") {
         println!("{}", "Operation cancelled.".yellow());
         return Ok(());
     }
 
-    if !to_uninstall.scoop_apps.is_empty() || !to_uninstall.scoop_buckets.is_empty() {
-        println!("\n🗑️  {}", "Uninstalling items...".red().bold());
+    if !to_uninstall.is_empty() {
+        println!("{} items", make_label("Uninstalling"));
         uninstall_apps(&to_uninstall.scoop_apps)?;
         uninstall_buckets(&to_uninstall.scoop_buckets)?;
     }
 
-    if !to_install.scoop_apps.is_empty() || !to_install.scoop_buckets.is_empty() {
-        println!("\n📦 {}", "Installing items...".green().bold());
+    if !to_install.is_empty() {
+        println!("{} items", make_label("Installing"));
         install_buckets(&to_install.scoop_buckets)?;
         install_apps(&to_install.scoop_apps)?;
     }
 
-    println!(
-        "\n✨ {}",
-        "Operation completed successfully!".green().bold()
-    );
+    println!("{}", "Operation completed successfully!".green().bold());
 
     Ok(())
 }
@@ -231,10 +211,7 @@ struct InstalledThings {
 
 // インストールされているアプリケーションのリストを取得
 fn get_installed_things() -> Result<InstalledThings> {
-    println!(
-        "{} currently installed applications",
-        make_label("Loading")
-    );
+    println!("{} currently installed applications", make_label("Loading"));
     let exported = Command::new("scoop")
         .arg("export")
         .output()
@@ -301,6 +278,29 @@ struct ThingsToUninstall {
     scoop_apps: HashSet<ScoopApp>,
 }
 
+impl ThingsToUninstall {
+    fn is_empty(&self) -> bool {
+        self.scoop_apps.is_empty() && self.scoop_buckets.is_empty()
+    }
+
+    fn describe_plan(&self) {
+        if self.is_empty() {
+            return;
+        }
+
+        println!();
+        println!("Following items will be {}", "uninstalled".red().bold());
+
+        for bucket in &self.scoop_buckets {
+            println!("{}", format_item_remove("bucket", &bucket.name));
+        }
+
+        for app in &self.scoop_apps {
+            println!("{}", format_item_remove("app", app));
+        }
+    }
+}
+
 fn compute_things_to_uninstall(
     installed_things: &InstalledThings,
     required_things: &RequiredThings,
@@ -330,6 +330,29 @@ fn compute_things_to_uninstall(
 struct ThingsToInstall {
     scoop_buckets: HashSet<ScoopBucket>,
     scoop_apps: HashSet<ScoopApp>,
+}
+
+impl ThingsToInstall {
+    fn is_empty(&self) -> bool {
+        self.scoop_apps.is_empty() && self.scoop_buckets.is_empty()
+    }
+
+    fn describe_plan(&self) {
+        if self.is_empty() {
+            return;
+        }
+
+        println!();
+        println!("Following items will be {}", "installed".green().bold());
+
+        for bucket in &self.scoop_buckets {
+            println!("{}", format_item_add("bucket", &bucket.name));
+        }
+
+        for app in &self.scoop_apps {
+            println!("{}", format_item_add("app", app));
+        }
+    }
 }
 
 fn compute_things_to_install(
