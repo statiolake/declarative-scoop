@@ -4,12 +4,16 @@ use std::{
     fs::File,
     io::{self, BufReader, Write},
     path::Path,
-    process::Command,
 };
 
 use colored::*;
+use itertools::Itertools;
 use miette::{IntoDiagnostic, Result, WrapErr, bail, miette};
 use serde::Deserialize;
+
+use crate::client::{ExecResult, ScoopClient};
+
+mod client;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -72,8 +76,12 @@ fn format_item_remove(kind: &str, name: impl fmt::Display) -> String {
 
 fn main() -> Result<()> {
     let config = read_config_from_file("app-requirements.yaml")?;
-    let required = get_required_things(&config).wrap_err("failed to resolve dependencies")?;
-    let installed = get_installed_things().wrap_err("failed to get installed applications")?;
+    let mut client = ScoopClient::new().wrap_err("failed to initialize scoop client")?;
+
+    let required =
+        get_required_things(&mut client, &config).wrap_err("failed to resolve dependencies")?;
+    let installed =
+        get_installed_things(&mut client).wrap_err("failed to get installed applications")?;
     let to_uninstall = compute_things_to_uninstall(&installed, &required);
     let to_install = compute_things_to_install(&installed, required);
 
@@ -99,14 +107,14 @@ fn main() -> Result<()> {
 
     if !to_uninstall.is_empty() {
         println!("{} items", make_label("Uninstalling"));
-        uninstall_apps(&to_uninstall.scoop_apps)?;
-        uninstall_buckets(&to_uninstall.scoop_buckets)?;
+        uninstall_apps(&mut client, &to_uninstall.scoop_apps)?;
+        uninstall_buckets(&mut client, &to_uninstall.scoop_buckets)?;
     }
 
     if !to_install.is_empty() {
         println!("{} items", make_label("Installing"));
-        install_buckets(&to_install.scoop_buckets)?;
-        install_apps(&to_install.scoop_apps)?;
+        install_buckets(&mut client, &to_install.scoop_buckets)?;
+        install_apps(&mut client, &to_install.scoop_apps)?;
     }
 
     println!("{}", "Operation completed successfully!".green().bold());
@@ -140,23 +148,18 @@ struct RequiredThings {
     scoop_apps: HashMap<ScoopApp, HashSet<ScoopApp>>,
 }
 
-fn get_required_things(config: &Config) -> Result<RequiredThings> {
+fn get_required_things(client: &mut ScoopClient, config: &Config) -> Result<RequiredThings> {
     println!("{} dependencies", make_label("Loading"));
-    fn get_dependencies_of(app: &ScoopApp) -> Result<HashSet<ScoopApp>> {
+    fn get_dependencies_of(client: &mut ScoopClient, app: &ScoopApp) -> Result<HashSet<ScoopApp>> {
         println!("{} {}", make_sublabel("Resolving"), app);
-        let output = Command::new("scoop.cmd")
-            .arg("depends")
-            .arg(&app.to_string())
-            .output()
-            .into_diagnostic()
-            .wrap_err_with(|| miette!("failed to invoke `scoop depends {app}`"))?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let ExecResult {
+            stdout,
+            stderr,
+            status,
+        } = client.exec(&["depends", &app.to_string()])?;
 
-        if !output.status.success() || stdout.contains("Couldn't find manifest for") {
-            bail!(
-                "failed to get dependencies for {app}: {stderr}",
-                stderr = String::from_utf8_lossy(&output.stderr)
-            );
+        if !status.success() || stdout.contains("Couldn't find manifest for") {
+            bail!("failed to get dependencies for {app}: {stderr}",);
         }
 
         stdout
@@ -188,7 +191,7 @@ fn get_required_things(config: &Config) -> Result<RequiredThings> {
             continue;
         }
 
-        let dependencies = match get_dependencies_of(&app) {
+        let dependencies = match get_dependencies_of(client, &app) {
             Ok(deps) => deps,
             Err(e) => {
                 println!("{} Skipping due to error: {e}", make_sublabel("Info"));
@@ -213,18 +216,13 @@ struct InstalledThings {
 }
 
 // インストールされているアプリケーションのリストを取得
-fn get_installed_things() -> Result<InstalledThings> {
+fn get_installed_things(client: &mut ScoopClient) -> Result<InstalledThings> {
     println!("{} currently installed applications", make_label("Loading"));
-    let exported = Command::new("scoop.cmd")
-        .arg("export")
-        .output()
-        .into_diagnostic()
+    let exported = client
+        .exec(&["export"])
         .wrap_err("failed to invoke `scoop export`")?;
     if !exported.status.success() {
-        bail!(
-            "failed to export scoop status: {}",
-            String::from_utf8_lossy(&exported.stderr)
-        );
+        bail!("failed to export scoop status: {}", exported.stderr);
     }
 
     #[derive(Deserialize)]
@@ -249,7 +247,7 @@ fn get_installed_things() -> Result<InstalledThings> {
         bucket: Option<String>,
     }
 
-    let data: ExportedScoopData = serde_json::from_slice(&exported.stdout)
+    let data: ExportedScoopData = serde_json::from_str(&exported.stdout)
         .into_diagnostic()
         .wrap_err("failed to parse `scoop export` output")?;
 
@@ -383,63 +381,83 @@ fn compute_things_to_install(
     }
 }
 
-fn uninstall_buckets<'a>(buckets: impl IntoIterator<Item = &'a ScoopBucket>) -> Result<()> {
-    Command::new("scoop.cmd")
-        .arg("bucket")
-        .arg("rm")
-        .args(buckets.into_iter().map(|bucket| bucket.name.clone()))
-        .spawn()
-        .into_diagnostic()
-        .wrap_err("failed to spawn uninstalling buckets")?
-        .wait()
-        .into_diagnostic()
-        .wrap_err("failed to wait uninstalling buckets")?;
-
-    Ok(())
-}
-
-fn uninstall_apps<'a>(apps: impl IntoIterator<Item = &'a ScoopApp>) -> Result<()> {
-    Command::new("scoop.cmd")
-        .arg("uninstall")
-        .args(apps.into_iter().map(|app| app.to_string()))
-        .spawn()
-        .into_diagnostic()
-        .wrap_err("failed to spawn uninstalling applications")?
-        .wait()
-        .into_diagnostic()
-        .wrap_err("failed to wait uninstalling applications")?;
-
-    Ok(())
-}
-
-fn install_buckets<'a>(buckets: impl IntoIterator<Item = &'a ScoopBucket>) -> Result<()> {
-    for bucket in buckets {
-        Command::new("scoop.cmd")
-            .arg("bucket")
-            .arg("add")
-            .arg(&bucket.name)
-            .arg(&bucket.source)
-            .spawn()
-            .into_diagnostic()
-            .wrap_err("failed to spawn installing buckets")?
-            .wait()
-            .into_diagnostic()
-            .wrap_err("failed to wait installing buckets")?;
+fn uninstall_buckets<'a>(
+    client: &mut ScoopClient,
+    buckets: impl IntoIterator<Item = &'a ScoopBucket>,
+) -> Result<()> {
+    let mut args = vec!["bucket", "rm"];
+    let bucket_names = buckets.into_iter().map(|b| &*b.name).collect_vec();
+    if bucket_names.is_empty() {
+        return Ok(()); // Nothing to uninstall
+    }
+    args.extend(&bucket_names);
+    let output = client.exec(&args).wrap_err("failed to uninstall buckets")?;
+    if !output.status.success() {
+        bail!("failed to uninstall buckets: {}", output.stderr.trim());
     }
 
     Ok(())
 }
 
-fn install_apps<'a>(apps: impl IntoIterator<Item = &'a ScoopApp>) -> Result<()> {
-    Command::new("scoop.cmd")
-        .arg("install")
-        .args(apps.into_iter().map(|app| app.to_string()))
-        .spawn()
-        .into_diagnostic()
-        .wrap_err("failed to spawn installing applications")?
-        .wait()
-        .into_diagnostic()
-        .wrap_err("failed to wait installing applications")?;
+fn uninstall_apps<'a>(
+    client: &mut ScoopClient,
+    apps: impl IntoIterator<Item = &'a ScoopApp>,
+) -> Result<()> {
+    let mut args = vec!["uninstall"];
+    let app_ids = apps.into_iter().map(|app| app.to_string()).collect_vec();
+    args.extend(app_ids.iter().map(|id| id.as_str()));
+    if app_ids.is_empty() {
+        return Ok(()); // Nothing to uninstall
+    }
+    let output = client
+        .exec(&args)
+        .wrap_err("failed to uninstall applications")?;
+    if !output.status.success() {
+        bail!("failed to uninstall applications: {}", output.stderr.trim());
+    }
+
+    Ok(())
+}
+
+fn install_buckets<'a>(
+    client: &mut ScoopClient,
+    buckets: impl IntoIterator<Item = &'a ScoopBucket>,
+) -> Result<()> {
+    for bucket in buckets {
+        let output = client
+            .exec(&["bucket", "add", &bucket.name, &bucket.source])
+            .wrap_err_with(|| {
+                miette!(
+                    "failed to install bucket {} from {}",
+                    bucket.name,
+                    bucket.source
+                )
+            })?;
+        if !output.status.success() {
+            bail!(
+                "failed to install bucket {}: {}",
+                bucket.name,
+                output.stderr.trim()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn install_apps<'a>(
+    client: &mut ScoopClient,
+    apps: impl IntoIterator<Item = &'a ScoopApp>,
+) -> Result<()> {
+    let mut args = vec!["install"];
+    let app_ids = apps.into_iter().map(|app| app.to_string()).collect_vec();
+    args.extend(app_ids.iter().map(|id| id.as_str()));
+    let output = client
+        .exec(&args)
+        .wrap_err("failed to install applications")?;
+    if !output.status.success() {
+        bail!("failed to install applications: {}", output.stderr.trim());
+    }
 
     Ok(())
 }
