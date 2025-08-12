@@ -1,14 +1,16 @@
 use itertools::Itertools;
 use miette::{Context, IntoDiagnostic, Result, bail};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::thread;
 use std::{
+    env,
     io::{BufRead, BufReader, Read, Write},
-    path::PathBuf,
 };
-use std::{
-    os::windows::process::ExitStatusExt,
-    process::{Child, ChildStdin, Command, ExitStatus, Stdio},
-};
+
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+#[cfg(windows)]
+use std::os::windows::process::ExitStatusExt;
 
 #[derive(Debug)]
 pub struct ExecResult {
@@ -19,7 +21,7 @@ pub struct ExecResult {
 
 pub struct ScoopClient {
     powershell: PowerShellClient,
-    script_path: PathBuf,
+    script_path: String,
 }
 
 impl ScoopClient {
@@ -27,17 +29,19 @@ impl ScoopClient {
     pub fn new() -> Result<Self> {
         let powershell = PowerShellClient::new()?;
 
-        let home_dir = std::env::var("USERPROFILE")
-            .into_diagnostic()
-            .wrap_err("failed to get USERPROFILE environment variable")?;
-        let script_path = PathBuf::from(format!(
-            r#"{home_dir}\scoop\apps\scoop\current\bin\scoop.ps1"#
-        ));
-        if !script_path.exists() {
-            bail!(
-                "failed to determine scoop script path: {script_path:?} does not exist. check you correctly installed scoop"
-            );
-        }
+        let home_dir = String::from_utf8_lossy(
+            Command::new("cmd.exe")
+                .arg("/c")
+                .arg("echo %USERPROFILE%")
+                .output()
+                .into_diagnostic()
+                .wrap_err("failed to get USERPROFILE environment variable")?
+                .stdout
+                .as_slice(),
+        )
+        .trim()
+        .to_string();
+        let script_path = format!(r#"{home_dir}\scoop\apps\scoop\current\bin\scoop.ps1"#);
 
         Ok(Self {
             powershell,
@@ -46,7 +50,7 @@ impl ScoopClient {
     }
 
     pub fn exec(&mut self, commands: &[&str]) -> Result<ExecResult> {
-        let mut full_command = vec!["&", self.script_path.to_str().unwrap()];
+        let mut full_command = vec!["&", self.script_path.as_str()];
         full_command.extend_from_slice(commands);
 
         self.powershell.exec(&full_command)
@@ -66,7 +70,7 @@ pub struct PowerShellClient {
 impl PowerShellClient {
     /// 新しい PowerShell クライアントを作成し、バックグラウンドで PowerShell プロセスを起動します。
     pub fn new() -> Result<Self> {
-        let mut process = Command::new("pwsh")
+        let mut process = Command::new("pwsh.exe")
             .args([
                 "-NoLogo",         // ロゴを表示しない
                 "-NoProfile",      // プロファイルスクリプトを読み込まない
@@ -168,7 +172,7 @@ impl PowerShellClient {
             bail!("failed to find EXIT_CODE in stdout: {stdout_str}");
         };
         let code_str = &stdout_str[pos + "EXIT_CODE:".len()..].trim();
-        let exit_code = code_str.parse::<i32>().unwrap_or(-1) as u32;
+        let exit_code = code_str.parse::<i32>().unwrap_or(-1);
         stdout_str.truncate(pos); // EXIT_CODEの部分を削除
         let status = ExitStatus::from_raw(exit_code);
 
